@@ -43,6 +43,9 @@ def _decrypt_token(data: bytes) -> str:
             return decrypted.decode("utf-8")
         except ImportError:
             pass
+        except Exception:
+            # DPAPI failed (token may have been stored as base64) — fall through
+            pass
     import base64
     return base64.b64decode(data).decode("utf-8")
 

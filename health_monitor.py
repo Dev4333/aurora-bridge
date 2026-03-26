@@ -7,6 +7,7 @@ Shows green/yellow/red status:
 """
 
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -128,7 +129,3 @@ class HealthMonitor:
                 self._tray_icon.stop()
             except Exception:
                 pass
-
-
-# Need os for check_mt5_access
-import os

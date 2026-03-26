@@ -20,6 +20,7 @@ class ResultReader:
 
     def __init__(self, mt5_files_path: str, signal_filename: str = "signals.csv"):
         self.signal_file = Path(mt5_files_path) / signal_filename
+        self.ticket_file = Path(mt5_files_path) / "last_ticket.csv"
         self.reported_ids: set[str] = set()
         self._running = False
 
@@ -41,9 +42,26 @@ class ResultReader:
 
             await asyncio.sleep(interval)
 
+    def _load_tickets(self) -> dict[str, str]:
+        """Load signal_id → ticket mapping from last_ticket.csv."""
+        tickets = {}
+        if not self.ticket_file.exists():
+            return tickets
+        try:
+            with open(self.ticket_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if "," in line:
+                        sid, ticket = line.split(",", 1)
+                        tickets[sid.strip()] = ticket.strip()
+        except Exception:
+            pass
+        return tickets
+
     def _read_results(self) -> list[ExecutionResult]:
         """Read all non-pending signals from the CSV."""
         results = []
+        tickets = self._load_tickets()
         try:
             with open(self.signal_file, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
@@ -63,6 +81,7 @@ class ResultReader:
                     results.append(ExecutionResult(
                         signal_id=signal_id,
                         status=api_status,
+                        ticket=tickets.get(signal_id),
                         error_message=status_raw if api_status == "failed" else None,
                     ))
         except Exception as e:

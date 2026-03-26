@@ -54,6 +54,7 @@ async def main():
         save_config(config)
     if args.mt5_path:
         config.mt5_signal_file = args.mt5_path
+        save_config(config)
 
     logger.info("═" * 50)
     logger.info("  Aurora Bridge Agent v1.4")
