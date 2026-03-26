@@ -42,6 +42,7 @@ logger = logging.getLogger("aurora-bridge")
 async def main():
     parser = argparse.ArgumentParser(description="Aurora Bridge Agent")
     parser.add_argument("--setup", action="store_true", help="Force re-authentication")
+    parser.add_argument("--token", type=str, help="Bridge API key (from Aurora X → Strategy Builder → Trader tab)")
     parser.add_argument("--mt5-path", type=str, help="Manual path to MT5 Files directory")
     parser.add_argument("--api-url", type=str, help="Aurora API URL override")
     args = parser.parse_args()
@@ -59,15 +60,29 @@ async def main():
     logger.info(f"API: {config.api_url}")
 
     # ── Step 1: Authentication ────────────────────────────────────────────
-    if args.setup or not config.token:
-        logger.info("Authentication required...")
-        auth = AuthManager(config.api_url)
-        token = await auth.authenticate()
-        if not token:
-            logger.error("Authentication failed. Exiting.")
-            sys.exit(1)
-        config.token = token
+    if args.token:
+        # Direct token via CLI flag
+        config.token = args.token
         save_config(config)
+        logger.info("Token set via --token flag")
+    elif args.setup or not config.token:
+        # Interactive: prompt for token or try OAuth
+        logger.info("No API key found. You can get one from Aurora X → Strategy Builder → Trader tab.")
+        logger.info("")
+        token_input = input("Paste your Bridge API Key (or press Enter for browser login): ").strip()
+        if token_input:
+            config.token = token_input
+            save_config(config)
+            logger.info("Token saved!")
+        else:
+            logger.info("Opening browser for authentication...")
+            auth = AuthManager(config.api_url)
+            token = await auth.authenticate()
+            if not token:
+                logger.error("Authentication failed. Try again with: AuroraBridge.exe --token YOUR_API_KEY")
+                sys.exit(1)
+            config.token = token
+            save_config(config)
 
     # ── Step 2: Detect MT5 path ───────────────────────────────────────────
     if not config.mt5_signal_file:
