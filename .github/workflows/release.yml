@@ -1,0 +1,78 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*" # Trigger on version tags like v1.0.0
+
+jobs:
+  build-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build .exe with PyInstaller
+        run: pyinstaller --onefile --windowed --name=AuroraBridge agent.py
+
+      - name: Upload .exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AuroraBridge-exe
+          path: dist/AuroraBridge.exe
+
+  release:
+    needs: build-exe
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: AuroraBridge-exe
+          path: release-assets/
+
+      - name: Create release ZIP
+        run: |
+          mkdir -p aurora-bridge-bundle
+          cp release-assets/AuroraBridge.exe aurora-bridge-bundle/
+          cp ea/AuroraX_Copier.mq5 aurora-bridge-bundle/
+          # Include the .ex5 if it exists (you add it to the repo after compiling)
+          if [ -f ea/AuroraX_Copier.ex5 ]; then
+            cp ea/AuroraX_Copier.ex5 aurora-bridge-bundle/
+          fi
+          cd aurora-bridge-bundle && zip -r ../AuroraBridge.zip .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AuroraBridge.zip
+            release-assets/AuroraBridge.exe
+          body: |
+            ## Aurora Bridge Agent
+
+            ### Quick Start
+            1. Download `AuroraBridge.zip` (contains everything) or just `AuroraBridge.exe`
+            2. Run `AuroraBridge.exe` — it opens a browser for login
+            3. Copy your API key from Aurora X → Strategy Builder → Trader tab
+            4. Agent auto-detects MT5 and installs the EA
+
+            ### What's inside AuroraBridge.zip
+            - `AuroraBridge.exe` — The bridge agent (runs on your PC/VPS)
+            - `AuroraX_Copier.mq5` — EA source code (compile in MetaEditor if needed)
+            - `AuroraX_Copier.ex5` — Compiled EA (drag onto any MT5 chart)
+
+            ### Requirements
+            - Windows 10/11
+            - MetaTrader 5 installed
+          generate_release_notes: true
