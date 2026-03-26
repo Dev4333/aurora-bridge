@@ -1,7 +1,8 @@
-"""Signal Receiver — SSE client + REST polling fallback.
+"""Signal Receiver — REST polling (primary) + SSE (optional enhancement).
 
-Maintains an SSE connection to /bridge/signals/stream for real-time signal delivery.
-Falls back to polling /bridge/signals/pending every N seconds if SSE disconnects.
+Polls /bridge/signals/pending every 5 seconds as the primary delivery method.
+Optionally maintains an SSE connection for instant delivery when available.
+SSE failures use exponential backoff to avoid log spam.
 Deduplicates signals using a local set of seen IDs.
 """
 
@@ -79,35 +80,47 @@ class SignalReceiver:
             logger.error(f"Error acking signal {signal_id[:8]}: {e}")
 
     async def _sse_loop(self):
-        """Connect to SSE stream and yield signals."""
-        logger.info("Connecting to SSE stream...")
-        try:
-            timeout = aiohttp.ClientTimeout(total=None, sock_read=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(
-                    f"{self.api_url}/bridge/signals/stream",
-                    headers=self.headers,
-                ) as resp:
-                    if resp.status == 401:
-                        logger.error("SSE auth failed — token may be expired")
-                        return
-                    if resp.status != 200:
-                        logger.warning(f"SSE connection failed: HTTP {resp.status}")
-                        return
+        """Connect to SSE stream — optional enhancement, failures are non-fatal."""
+        sse_backoff = 5  # Start at 5s, increase on failure
+        max_backoff = 120  # Cap at 2 minutes
 
-                    logger.info("SSE stream connected ✓")
-                    buffer = ""
-                    async for chunk in resp.content:
-                        if not self._running:
-                            break
-                        buffer += chunk.decode("utf-8", errors="replace")
-                        while "\n\n" in buffer:
-                            message, buffer = buffer.split("\n\n", 1)
-                            await self._parse_sse_message(message)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.warning(f"SSE connection lost: {e}")
+        while self._running:
+            try:
+                logger.debug(f"Connecting to SSE stream...")
+                timeout = aiohttp.ClientTimeout(total=None, sock_read=60)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(
+                        f"{self.api_url}/bridge/signals/stream",
+                        headers=self.headers,
+                    ) as resp:
+                        if resp.status == 401:
+                            logger.error("SSE auth failed — token may be expired")
+                            return  # Don't retry auth failures
+                        if resp.status != 200:
+                            logger.debug(f"SSE connection failed: HTTP {resp.status}")
+                            await asyncio.sleep(sse_backoff)
+                            sse_backoff = min(sse_backoff * 2, max_backoff)
+                            continue
+
+                        logger.info("SSE stream connected ✓")
+                        sse_backoff = 5  # Reset backoff on success
+                        buffer = ""
+                        async for chunk in resp.content:
+                            if not self._running:
+                                return
+                            buffer += chunk.decode("utf-8", errors="replace")
+                            while "\n\n" in buffer:
+                                message, buffer = buffer.split("\n\n", 1)
+                                await self._parse_sse_message(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug(f"SSE connection lost: {e}")
+
+            if not self._running:
+                return
+            await asyncio.sleep(sse_backoff)
+            sse_backoff = min(sse_backoff * 2, max_backoff)
 
     async def _parse_sse_message(self, raw: str):
         """Parse an SSE message and queue the signal."""
@@ -148,37 +161,32 @@ class SignalReceiver:
             await asyncio.sleep(self.poll_interval)
 
     async def stream(self) -> AsyncIterator[Signal]:
-        """Main stream: runs SSE with polling fallback. Yields signals."""
+        """Main stream: polling is primary, SSE runs in background as enhancement."""
         self._running = True
 
-        # Start polling fallback in background
+        # Start polling as primary delivery (every 5 seconds)
         poll_task = asyncio.create_task(self._poll_loop())
 
-        # SSE with auto-reconnect
-        sse_task = None
+        # Start SSE as optional background enhancement (non-blocking, auto-reconnects)
+        sse_task = asyncio.create_task(self._sse_loop())
+
         try:
             while self._running:
-                sse_task = asyncio.create_task(self._sse_loop())
-
-                # Yield signals from the queue while SSE is running
-                while self._running:
-                    try:
-                        signal = await asyncio.wait_for(self._signal_queue.get(), timeout=1.0)
-                        yield signal
-                    except asyncio.TimeoutError:
-                        # Check if SSE task died
-                        if sse_task.done():
-                            logger.info("SSE disconnected, reconnecting in 5s...")
-                            await asyncio.sleep(5)
-                            break  # Reconnect
-                        continue
+                try:
+                    signal = await asyncio.wait_for(self._signal_queue.get(), timeout=1.0)
+                    yield signal
+                except asyncio.TimeoutError:
+                    continue
         finally:
             self._running = False
             poll_task.cancel()
-            if sse_task and not sse_task.done():
-                sse_task.cancel()
+            sse_task.cancel()
             try:
                 await poll_task
+            except asyncio.CancelledError:
+                pass
+            try:
+                await sse_task
             except asyncio.CancelledError:
                 pass
 
