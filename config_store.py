@@ -60,6 +60,12 @@ def load_config() -> AgentConfig:
     else:
         config = AgentConfig()
 
+    # Migrate old wrong URLs to correct default
+    if "aurora-x-backend" in config.api_url:
+        config.api_url = AgentConfig().api_url
+        save_config(config)
+        logger.info(f"Migrated API URL to {config.api_url}")
+
     # Load encrypted token
     if TOKEN_FILE.exists() and not config.token:
         try:
