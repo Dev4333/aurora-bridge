@@ -1,6 +1,6 @@
 # Aurora Bridge Agent
 
-Direct signal delivery from Aurora X to MetaTrader 5. Replaces the Telegram-based trade copier.
+Direct signal delivery from Aurora X to MetaTrader 5.
 
 ## User Setup (3 steps)
 
