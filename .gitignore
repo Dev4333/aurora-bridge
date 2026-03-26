@@ -12,3 +12,7 @@ venv/
 config.json
 token.enc
 .aurora-bridge/
+.DS_Store
+**/.DS_Store
+*.ex5
+*.ex4
